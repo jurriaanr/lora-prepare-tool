@@ -406,7 +406,7 @@ class ImageViewport(ttk.Frame):
 class ImageCropperApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Square Cropper — Selectable Frame Size")
+        self.title("Lara Prepare Tool — Square Cropper")
 
         # Paths
         self.app_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
@@ -414,7 +414,7 @@ class ImageCropperApp(tk.Tk):
         self.global_words_path = os.path.join(self.app_dir, GLOBAL_WORDS_FILE)
         self.config_path = os.path.join(self.app_dir, CONFIG_FILE)
 
-        # Load config (geometry + frame size)
+        # Load config (geometry + frame size + export folders)
         cfg = self._load_config()
 
         # Big window; image-first (geometry from config if available)
@@ -432,6 +432,10 @@ class ImageCropperApp(tk.Tk):
         self.idx = -1
         self.frame_size_var = tk.IntVar(value=int(cfg.get("frame_size", DEFAULT_FRAME_SIZE)))
         self.tag_counts = {}
+
+        # Export directories (None/"" = per-image defaults)
+        self.output_dir_config = cfg.get("output_dir", "").strip()
+        self.processed_dir_config = cfg.get("processed_dir", "").strip()
 
         # Paned layout (reliable 67/33 split)
         self.panes = tk.PanedWindow(self, orient="horizontal", sashrelief="flat", sashwidth=6)
@@ -482,14 +486,40 @@ class ImageCropperApp(tk.Tk):
         self.file_label = ttk.Label(side, text="No files loaded", wraplength=320)
         self.file_label.grid(row=3, column=0, sticky="w", pady=(6, 10))
 
-        ttk.Button(side, text="Fit full", command=self.viewport.fit_full).grid(row=4, column=0, sticky="ew")
-        ttk.Button(side, text="Cover frame", command=self.viewport.fit_cover_frame).grid(row=5, column=0, sticky="ew")
+        # --- Export directories section ---
+        ttk.Separator(side, orient="horizontal").grid(row=4, column=0, sticky="ew", pady=(6, 8))
+        ttk.Label(side, text="Export folders").grid(row=5, column=0, sticky="w")
+
+        # Output dir
+        out_row = ttk.Frame(side)
+        out_row.grid(row=6, column=0, sticky="ew", pady=(2, 2))
+        out_row.columnconfigure(0, weight=1)
+        self.output_dir_var = tk.StringVar(value=self.output_dir_config)
+        self.output_entry = ttk.Entry(out_row, textvariable=self.output_dir_var)
+        self.output_entry.grid(row=0, column=0, sticky="ew")
+        ttk.Button(out_row, text="Browse…", command=self._browse_output_dir).grid(row=0, column=1, padx=(6, 0))
+        ttk.Button(out_row, text="Default", command=self._reset_output_default).grid(row=0, column=2, padx=(6, 0))
+        ttk.Label(side, text="(blank = use per-image folder /output)").grid(row=7, column=0, sticky="w")
+
+        # Processed dir
+        proc_row = ttk.Frame(side)
+        proc_row.grid(row=8, column=0, sticky="ew", pady=(6, 2))
+        proc_row.columnconfigure(0, weight=1)
+        self.processed_dir_var = tk.StringVar(value=self.processed_dir_config)
+        self.processed_entry = ttk.Entry(proc_row, textvariable=self.processed_dir_var)
+        self.processed_entry.grid(row=0, column=0, sticky="ew")
+        ttk.Button(proc_row, text="Browse…", command=self._browse_processed_dir).grid(row=0, column=1, padx=(6, 0))
+        ttk.Button(proc_row, text="Default", command=self._reset_processed_default).grid(row=0, column=2, padx=(6, 0))
+        ttk.Label(side, text="(blank = use per-image folder /processed)").grid(row=9, column=0, sticky="w", pady=(0, 4))
+
+        ttk.Button(side, text="Fit full", command=self.viewport.fit_full).grid(row=10, column=0, sticky="ew")
+        ttk.Button(side, text="Cover frame", command=self.viewport.fit_cover_frame).grid(row=11, column=0, sticky="ew")
 
         # --- Global words (prefix) ---
-        ttk.Separator(side, orient="horizontal").grid(row=6, column=0, sticky="ew", pady=8)
-        ttk.Label(side, text="Global words (prefixed to each .txt)").grid(row=7, column=0, sticky="w")
+        ttk.Separator(side, orient="horizontal").grid(row=12, column=0, sticky="ew", pady=8)
+        ttk.Label(side, text="Global words (prefixed to each .txt)").grid(row=13, column=0, sticky="w")
         global_wrap = ttk.Frame(side)
-        global_wrap.grid(row=8, column=0, sticky="ew")
+        global_wrap.grid(row=14, column=0, sticky="ew")
         self.global_text = tk.Text(global_wrap, height=3, wrap="word")
         self.global_text.pack(side="left", fill="x", expand=True)
         global_scroll = ttk.Scrollbar(global_wrap, orient="vertical", command=self.global_text.yview)
@@ -497,11 +527,11 @@ class ImageCropperApp(tk.Tk):
         self.global_text.configure(yscrollcommand=global_scroll.set)
 
         # --- Notes (per image) ---
-        ttk.Separator(side, orient="horizontal").grid(row=9, column=0, sticky="ew", pady=8)
-        ttk.Label(side, text="Notes per image (saved as .txt)").grid(row=10, column=0, sticky="w")
+        ttk.Separator(side, orient="horizontal").grid(row=15, column=0, sticky="ew", pady=8)
+        ttk.Label(side, text="Notes per image (saved as .txt)").grid(row=16, column=0, sticky="w")
         notes_wrap = ttk.Frame(side)
-        notes_wrap.grid(row=11, column=0, sticky="nsew")
-        side.rowconfigure(11, weight=1)
+        notes_wrap.grid(row=17, column=0, sticky="nsew")
+        side.rowconfigure(17, weight=1)
         self.note_text = tk.Text(notes_wrap, height=6, wrap="word")
         self.note_text.pack(side="left", fill="both", expand=True)
         notes_scroll = ttk.Scrollbar(notes_wrap, orient="vertical", command=self.note_text.yview)
@@ -510,7 +540,7 @@ class ImageCropperApp(tk.Tk):
 
         # Suggestions
         self.suggest_wrap = ttk.Frame(side)
-        self.suggest_wrap.grid(row=12, column=0, sticky="ew", pady=(6, 0))
+        self.suggest_wrap.grid(row=18, column=0, sticky="ew", pady=(6, 0))
         header = ttk.Frame(self.suggest_wrap)
         header.pack(fill="x")
         self.suggest_caption = ttk.Label(header, text="", foreground="#666")
@@ -519,12 +549,12 @@ class ImageCropperApp(tk.Tk):
         self.suggest_items_frame = ttk.Frame(self.suggest_wrap)
         self.suggest_items_frame.pack(fill="x", expand=True)
 
-        ttk.Separator(side, orient="horizontal").grid(row=13, column=0, sticky="ew", pady=8)
-        ttk.Button(side, text="Save & Next", command=self.save_and_next).grid(row=14, column=0, sticky="ew")
-        ttk.Button(side, text="Skip", command=self.skip).grid(row=15, column=0, sticky="ew", pady=(4, 0))
+        ttk.Separator(side, orient="horizontal").grid(row=19, column=0, sticky="ew", pady=8)
+        ttk.Button(side, text="Save & Next", command=self.save_and_next).grid(row=20, column=0, sticky="ew")
+        ttk.Button(side, text="Skip", command=self.skip).grid(row=21, column=0, sticky="ew", pady=(4, 0))
 
         self.progress_label = ttk.Label(side, text="—")
-        self.progress_label.grid(row=16, column=0, sticky="w", pady=(8, 0))
+        self.progress_label.grid(row=22, column=0, sticky="w", pady=(8, 0))
 
         # Init data: history + global words
         self._load_history()         # safe if missing
@@ -545,9 +575,13 @@ class ImageCropperApp(tk.Tk):
         # Save globals + config on close
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        # If no images on launch, show hint in label (canvas will be empty)
+        # If no images on launch, show empty canvas
         if not self.images:
             self.viewport.clear()
+
+        # Save config when entries are edited (on focus-out)
+        self.output_entry.bind("<FocusOut>", lambda e: self._apply_dir_entries(save=True))
+        self.processed_entry.bind("<FocusOut>", lambda e: self._apply_dir_entries(save=True))
 
     # ---- Config persistence ----
     def _load_config(self):
@@ -561,7 +595,9 @@ class ImageCropperApp(tk.Tk):
         try:
             cfg = {
                 "geometry": self.geometry(),
-                "frame_size": int(self.frame_size_var.get())
+                "frame_size": int(self.frame_size_var.get()),
+                "output_dir": self.output_dir_config,
+                "processed_dir": self.processed_dir_config,
             }
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2)
@@ -572,6 +608,56 @@ class ImageCropperApp(tk.Tk):
         # Redraw overlay (frame changes), keep current image; save config
         self.viewport._draw_overlay()
         self._save_config()
+
+    # --- Resolve export directories ---
+    def _normalize_dir(self, path_str: str) -> str:
+        """Return normalized absolute path for non-empty input; empty stays empty."""
+        if not path_str:
+            return ""
+        # Expand user (~) and env vars
+        path_str = os.path.expandvars(os.path.expanduser(path_str))
+        # If relative, make it relative to the app directory
+        if not os.path.isabs(path_str):
+            path_str = os.path.abspath(os.path.join(self.app_dir, path_str))
+        return path_str
+
+    def _effective_output_dir_for(self, src_path: str) -> str:
+        if self.output_dir_config:
+            return self._normalize_dir(self.output_dir_config)
+        return os.path.join(os.path.dirname(src_path), "output")
+
+    def _effective_processed_dir_for(self, src_path: str) -> str:
+        if self.processed_dir_config:
+            return self._normalize_dir(self.processed_dir_config)
+        return os.path.join(os.path.dirname(src_path), "processed")
+
+    def _apply_dir_entries(self, save=False):
+        self.output_dir_config = self.output_dir_var.get().strip()
+        self.processed_dir_config = self.processed_dir_var.get().strip()
+        if save:
+            self._save_config()
+
+    def _browse_output_dir(self):
+        initial = self._normalize_dir(self.output_dir_var.get().strip()) or self.app_dir
+        chosen = filedialog.askdirectory(initialdir=initial, title="Select Output Folder")
+        if chosen:
+            self.output_dir_var.set(chosen)
+            self._apply_dir_entries(save=True)
+
+    def _browse_processed_dir(self):
+        initial = self._normalize_dir(self.processed_dir_var.get().strip()) or self.app_dir
+        chosen = filedialog.askdirectory(initialdir=initial, title="Select Processed Folder")
+        if chosen:
+            self.processed_dir_var.set(chosen)
+            self._apply_dir_entries(save=True)
+
+    def _reset_output_default(self):
+        self.output_dir_var.set("")
+        self._apply_dir_entries(save=True)
+
+    def _reset_processed_default(self):
+        self.processed_dir_var.set("")
+        self._apply_dir_entries(save=True)
 
     # --- Guard: ignore Ctrl+Right if a Text/Entry is focused ---
     def _focused_in_text(self):
@@ -848,9 +934,14 @@ class ImageCropperApp(tk.Tk):
             out_img = self.viewport.get_crop_result_rgb()
             if out_img is None:
                 return
-            base_dir = os.path.dirname(path)
-            out_dir = os.path.join(base_dir, "output")
+
+            # Resolve effective dirs (configurable or per-image default)
+            out_dir = self._effective_output_dir_for(path)
+            proc_dir = self._effective_processed_dir_for(path)
+
             os.makedirs(out_dir, exist_ok=True)
+            os.makedirs(proc_dir, exist_ok=True)
+
             stem, _ = os.path.splitext(os.path.basename(path))
 
             # Save JPEG with same base name
@@ -880,10 +971,11 @@ class ImageCropperApp(tk.Tk):
                 self._process_text_for_counts(", ".join(notes_parts))
 
             # Move original to 'processed'
-            self._move_current_to_processed()
+            self._move_current_to_processed(proc_dir)
 
-            # Persist current global words
+            # Persist current global words + config
             self._save_global_words()
+            self._apply_dir_entries(save=True)
         except Exception as e:
             messagebox.showerror("Save error", f"Failed to save or move file.\n\n{e}")
             return
@@ -891,11 +983,11 @@ class ImageCropperApp(tk.Tk):
         self.clear_notes()
         self.next_image()
 
-    def _move_current_to_processed(self):
+    def _move_current_to_processed(self, proc_dir=None):
         try:
             src = self.images[self.idx]
-            base_dir = os.path.dirname(src)
-            proc_dir = os.path.join(base_dir, "processed")
+            if proc_dir is None:
+                proc_dir = self._effective_processed_dir_for(src)
             os.makedirs(proc_dir, exist_ok=True)
             dest = os.path.join(proc_dir, os.path.basename(src))
             if os.path.abspath(src) != os.path.abspath(dest):
@@ -914,6 +1006,7 @@ class ImageCropperApp(tk.Tk):
     def on_close(self):
         # Save globals + config on exit and close the app
         self._save_global_words()
+        self._apply_dir_entries(save=True)
         self._save_config()
         self.destroy()
 
