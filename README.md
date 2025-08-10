@@ -1,45 +1,36 @@
 # Lora Prepare Tool — A Lora Dataset Preparation Tool
 
-A cross-platform GUI tool for cropping images into a **square frame** with pixel-perfect control, designed for preparing datasets (e.g., for training LoRA models).
+A cross-platform GUI tool for cropping images into a **square frame**, designed for preparing datasets (e.g., for training LoRA models).
 
 ## ✨ Features
 
 - **Interactive cropping**:
   - Click and drag the image to position it within a square frame.
   - Mouse-wheel zoom (supports fine zoom with `Ctrl`/`⌘` held).
-  - **Snapping**: when dragging, edges within 10px of the frame snap perfectly.
-  - **Arrow key nudging** (1px steps) — only active when the image area is focused.
+  - **Snapping**: when dragging, edges within 10px of the frame snap the image.
+  - **Arrow key nudging** (1px steps).
 
 - **Frame options**:
   - Frame sizes: `512`, `768`, or `1024` pixels.
-  - Fit image fully inside frame or cover frame completely (cropping as needed).
-  - Dimmed (50% opacity) background outside the frame for clear visual boundaries.
-  - Frame and window layout **persist across sessions**.
+  - Quick option to fit image fully inside frame or cover frame completely (cropping as needed).
 
 - **Image queue management**:
   - Select multiple images; process sequentially.
   - **Save & Next**: crops the image to the frame, saves as JPEG, writes `.txt` tags file.
   - **Skip**: moves to the next image without cropping.
-  - Processed originals are moved to a `processed/` folder automatically.
-  - Cropped images + `.txt` metadata are saved in an `output/` folder.
+  - Processed originals are moved to a configurable `processed/` folder automatically.
+  - Cropped images + `.txt` metadata are saved in a configurable `output/` folder.
 
 - **Metadata tagging**:
   - **Global words**: Always added to `.txt` files first. Saved in `global_words.txt` and loaded at startup.
-  - **Per-image notes**: Specific tags for the current image.
+  - **Per-image companion notes**: Specific tags for the current image.
   - Tag suggestions based on history (words used in ≥2 images).
-  - Suggestions are **alphabetically sorted** for predictability.
   - Tag history saved in `suggest_history.txt` (semicolon-separated) and persisted.
 
 - **Smart text handling**:
   - Tags are deduplicated **per image**.
   - Tags are combined from global + per-image notes in order, separated by `, `.
   - Both `,` and newlines are accepted as separators when entering tags.
-
-- **Quality-of-life**:
-  - Clicking the image area with no image loaded opens the file chooser.
-  - Works on Windows, macOS, and Linux (cross-platform Tkinter + Pillow).
-  - Selection in text areas does not get lost when dragging outside the widget.
-  - After last image is saved or skipped, the viewport is cleared automatically.
 
 ---
 
@@ -71,7 +62,7 @@ processed/
 Created in the application directory:
 
 - `config.json` — window geometry + last-used frame size.
-- `global_words.txt` — your global tag list (always prefixed to `.txt` outputs).
+- `global_words.txt` — a global tag list (always prefixed to `.txt` outputs).
 - `suggest_history.txt` — alphabetical list of tags + their usage counts (for suggestions).
 
 ---
@@ -123,7 +114,6 @@ Originally designed for **LoRA training dataset prep**, but works well for any s
 
 ## 📌 Tips
 
-- Use the **Global words** box for recurring tags like `keyword`, `solo`, `looking_at_viewer`.
+- Use the **Global words** box for recurring tags like.
 - Adjust the frame size before starting to match your target training resolution.
-- Keep an eye on the **suggestion buttons** — they save typing time for recurring tags.
-- Resize the window freely — the image stays fixed relative to the frame.
+- Keep an eye on the **suggestion buttons** — they save typing and promote consistency for recurring tags.
