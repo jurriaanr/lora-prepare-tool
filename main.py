@@ -1,6 +1,7 @@
 import os
-import shutil
 import sys
+import json
+import shutil
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from PIL import Image, ImageTk
@@ -13,6 +14,7 @@ MAX_SCALE = 30.0
 SUGGEST_THRESHOLD = 2                 # show suggestions when a part is used >= 2 times
 HISTORY_FILE = "suggest_history.txt"  # semicolon-separated: tag;count
 GLOBAL_WORDS_FILE = "global_words.txt"
+CONFIG_FILE = "config.json"
 SNAP_TOL = 10                         # px; snap edges to frame when dragging
 
 SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
@@ -49,6 +51,9 @@ class ImageViewport(ttk.Frame):
         # Overlay
         self.overlay_ids = []
 
+        # Track canvas size to maintain image offset relative to frame on resize
+        self._last_canvas_size = None
+
         # Bindings
         self.canvas.bind("<ButtonPress-1>", self._on_press)
         self.canvas.bind("<B1-Motion>", self._on_drag)
@@ -64,25 +69,53 @@ class ImageViewport(ttk.Frame):
         h = max(50, int(self.canvas.winfo_height()))
         return w, h
 
-    def _frame_rect(self):
+    def _frame_rect_for(self, cw, ch):
         frame_size = self.get_frame_size()
-        cw, ch = self._canvas_size()
         L = (cw - frame_size) / 2
         T = (ch - frame_size) / 2
         return L, T, L + frame_size, T + frame_size
 
+    def _frame_rect(self):
+        cw, ch = self._canvas_size()
+        return self._frame_rect_for(cw, ch)
+
     # ---- Image handling ----
     def set_image(self, pil_image):
+        """Set a PIL image (RGBA converted). If None, clears the canvas."""
+        if pil_image is None:
+            self.clear()
+            return
+
         self.img_pil = pil_image.convert("RGBA")
         iw, ih = self.img_pil.size
         cw, ch = self._canvas_size()
+        self._last_canvas_size = (cw, ch)
+
         fit = min(cw / iw, ch / ih)
         fit = max(MIN_SCALE, min(MAX_SCALE, fit))
         self.S = fit
-        self.dx = (cw - iw * self.S) / 2.0
-        self.dy = (ch - ih * self.S) / 2.0
+
+        # Center image in the FRAME, not just the window
+        fL, fT, fR, fB = self._frame_rect()
+        fCx = (fL + fR) / 2.0
+        fCy = (fT + fB) / 2.0
+        self.dx = fCx - (iw * self.S) / 2.0
+        self.dy = fCy - (ih * self.S) / 2.0
+
         self._render_image()
         self._draw_overlay()
+
+    def clear(self):
+        """Clear image and overlay (used when no files are loaded)."""
+        self.img_pil = None
+        self.img_disp = None
+        self.tk_img = None
+        if self.img_id is not None:
+            self.canvas.delete(self.img_id)
+            self.img_id = None
+        for oid in self.overlay_ids:
+            self.canvas.delete(oid)
+        self.overlay_ids = []
 
     def _render_image(self):
         if self.img_pil is None:
@@ -104,6 +137,9 @@ class ImageViewport(ttk.Frame):
         for oid in self.overlay_ids:
             self.canvas.delete(oid)
         self.overlay_ids = []
+
+        if self.img_pil is None:
+            return
 
         L, T, R, B = self._frame_rect()
         cw, ch = self._canvas_size()
@@ -152,6 +188,7 @@ class ImageViewport(ttk.Frame):
         sx, sy = self._drag_start
         self.dx = self._start_dxdy[0] + (event.x - sx)
         self.dy = self._start_dxdy[1] + (event.y - sy)
+        # Snap edges to frame when mouse-dragging (not for arrow-key moves)
         self._apply_snap_to_frame()
         self._render_image()
 
@@ -170,6 +207,7 @@ class ImageViewport(ttk.Frame):
             self.canvas.bind("<MouseWheel>", self._on_wheel_windows)
 
     def _ctrl_held(self, event):
+        # Works on Windows/Linux/macOS
         return (event.state & 0x0004) != 0
 
     def _on_wheel_windows(self, event):
@@ -253,12 +291,31 @@ class ImageViewport(ttk.Frame):
         self._render_image()
 
     def move_image(self, dx, dy):
+        # Arrow key movement — NO snapping here
         self.dx += dx
         self.dy += dy
         self._render_image()
 
     # ---- Configure/Redraw ----
     def _on_configure(self, event):
+        """
+        Keep the image's offset relative to the FRAME constant during canvas resizes.
+        """
+        new_cw, new_ch = int(event.width), int(event.height)
+        old = self._last_canvas_size
+        self._last_canvas_size = (new_cw, new_ch)
+
+        if self.img_pil is not None and old is not None and (new_cw, new_ch) != old:
+            # Compute old frame and relative offset
+            old_L, old_T, _, _ = self._frame_rect_for(*old)
+            rel_dx = self.dx - old_L
+            rel_dy = self.dy - old_T
+
+            # Compute new frame and reapply relative offset
+            new_L, new_T, _, _ = self._frame_rect_for(new_cw, new_ch)
+            self.dx = new_L + rel_dx
+            self.dy = new_T + rel_dy
+
         self._redraw()
 
     def _redraw(self):
@@ -276,10 +333,12 @@ class ImageViewport(ttk.Frame):
         top = self.dy
         right = self.dx + w
         bottom = self.dy + h
+        # Horizontal snaps
         if abs(left - L) <= SNAP_TOL:
             self.dx = L
         if abs(right - R) <= SNAP_TOL:
             self.dx = R - w
+        # Vertical snaps
         if abs(top - T) <= SNAP_TOL:
             self.dy = T
         if abs(bottom - B) <= SNAP_TOL:
@@ -290,7 +349,7 @@ class ImageViewport(ttk.Frame):
         """
         Return an RGB PIL.Image of size (frame_size, frame_size) where the
         area of the source image that falls within the frame is pasted.
-        Any area outside the source image becomes black.
+        Any area outside the source image becomes black (letterboxing).
         """
         if self.img_pil is None:
             return None
@@ -298,6 +357,7 @@ class ImageViewport(ttk.Frame):
         frame_size = self.get_frame_size()
         fL, fT, fR, fB = self._frame_rect()
 
+        # Compute the image-space coordinates visible inside the frame
         left_img   = (fL - self.dx) / self.S
         top_img    = (fT - self.dy) / self.S
         right_img  = (fR - self.dx) / self.S
@@ -309,9 +369,11 @@ class ImageViewport(ttk.Frame):
         inter_right  = min(iw, right_img)
         inter_bottom = min(ih, bottom_img)
 
+        # Output canvas
         out = Image.new("RGB", (frame_size, frame_size), (0, 0, 0))
 
         if inter_right > inter_left and inter_bottom > inter_top:
+            # Crop the intersecting region from the original
             crop = self.img_pil.crop((
                 int(inter_left),
                 int(inter_top),
@@ -319,12 +381,14 @@ class ImageViewport(ttk.Frame):
                 int(inter_bottom)
             )).convert("RGB")
 
+            # Where does this intersection land in the frame (canvas-space)?
             interL_canvas = inter_left * self.S + self.dx
             interT_canvas = inter_top * self.S + self.dy
 
             dest_x = int(round(interL_canvas - fL))
             dest_y = int(round(interT_canvas - fT))
 
+            # Size of the intersection in canvas pixels
             inter_w_canvas = (inter_right - inter_left) * self.S
             inter_h_canvas = (inter_bottom - inter_top) * self.S
             target_w = max(1, int(round(inter_w_canvas)))
@@ -343,19 +407,31 @@ class ImageCropperApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Square Cropper — Selectable Frame Size")
-        self.geometry(f"{DEFAULT_FRAME_SIZE + 900}x{DEFAULT_FRAME_SIZE + 520}")
-        self.minsize(DEFAULT_FRAME_SIZE + 650, DEFAULT_FRAME_SIZE + 380)
-
-        # State
-        self.images = []
-        self.idx = -1
-        self.frame_size_var = tk.IntVar(value=DEFAULT_FRAME_SIZE)
-        self.tag_counts = {}
 
         # Paths
         self.app_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
         self.history_path = os.path.join(self.app_dir, HISTORY_FILE)
         self.global_words_path = os.path.join(self.app_dir, GLOBAL_WORDS_FILE)
+        self.config_path = os.path.join(self.app_dir, CONFIG_FILE)
+
+        # Load config (geometry + frame size)
+        cfg = self._load_config()
+
+        # Big window; image-first (geometry from config if available)
+        if cfg.get("geometry"):
+            try:
+                self.geometry(cfg["geometry"])
+            except Exception:
+                self.geometry(f"{DEFAULT_FRAME_SIZE + 900}x{DEFAULT_FRAME_SIZE + 520}")
+        else:
+            self.geometry(f"{DEFAULT_FRAME_SIZE + 900}x{DEFAULT_FRAME_SIZE + 520}")
+        self.minsize(DEFAULT_FRAME_SIZE + 650, DEFAULT_FRAME_SIZE + 380)
+
+        # State
+        self.images = []
+        self.idx = -1
+        self.frame_size_var = tk.IntVar(value=int(cfg.get("frame_size", DEFAULT_FRAME_SIZE)))
+        self.tag_counts = {}
 
         # Paned layout (reliable 67/33 split)
         self.panes = tk.PanedWindow(self, orient="horizontal", sashrelief="flat", sashwidth=6)
@@ -377,7 +453,7 @@ class ImageCropperApp(tk.Tk):
         self.viewport = ImageViewport(
             self.left_wrap,
             self.get_frame_size,
-            no_image_click_callback=self.choose_files
+            no_image_click_callback=self.choose_files  # open file picker on empty click
         )
         self.viewport.grid(row=0, column=0, sticky="nsew", padx=(14, 10), pady=(14, 8))
 
@@ -393,8 +469,13 @@ class ImageCropperApp(tk.Tk):
         side.columnconfigure(0, weight=1)
 
         ttk.Label(side, text="Frame size").grid(row=0, column=0, sticky="w")
-        size_menu = ttk.OptionMenu(side, self.frame_size_var, DEFAULT_FRAME_SIZE, 512, 768, 1024,
-                                   command=lambda _: self.viewport._draw_overlay())
+        size_menu = ttk.OptionMenu(
+            side,
+            self.frame_size_var,
+            self.frame_size_var.get(),
+            512, 768, 1024,
+            command=self._on_frame_size_changed
+        )
         size_menu.grid(row=1, column=0, sticky="ew", pady=(0, 8))
 
         ttk.Button(side, text="Open Images…", command=self.choose_files).grid(row=2, column=0, sticky="ew")
@@ -446,8 +527,8 @@ class ImageCropperApp(tk.Tk):
         self.progress_label.grid(row=16, column=0, sticky="w", pady=(8, 0))
 
         # Init data: history + global words
-        self._load_history()
-        self._load_global_words()
+        self._load_history()         # safe if missing
+        self._load_global_words()    # safe if missing
         self._refresh_suggestions()
 
         # Set/enforce split
@@ -458,11 +539,39 @@ class ImageCropperApp(tk.Tk):
         self.bind_all("<Control-s>", lambda e: self.save_and_next())
         self.bind_all("<Control-plus>", lambda e: self.viewport.zoom_in(fine=True))
         self.bind_all("<Control-minus>", lambda e: self.viewport.zoom_out(fine=True))
-        self.bind_all("<Control-Right>", self._ctrl_right_guard)
-        self.bind_all("<Return>", self._enter_open_if_empty)
+        self.bind_all("<Control-Right>", self._ctrl_right_guard)  # guarded: ignored when Text has focus
+        self.bind_all("<Return>", self._enter_open_if_empty)      # Enter opens chooser when empty
 
-        # Save globals on close too
+        # Save globals + config on close
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        # If no images on launch, show hint in label (canvas will be empty)
+        if not self.images:
+            self.viewport.clear()
+
+    # ---- Config persistence ----
+    def _load_config(self):
+        try:
+            with open(self.config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save_config(self):
+        try:
+            cfg = {
+                "geometry": self.geometry(),
+                "frame_size": int(self.frame_size_var.get())
+            }
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+        except Exception:
+            pass  # don't block the UI
+
+    def _on_frame_size_changed(self, _value=None):
+        # Redraw overlay (frame changes), keep current image; save config
+        self.viewport._draw_overlay()
+        self._save_config()
 
     # --- Guard: ignore Ctrl+Right if a Text/Entry is focused ---
     def _focused_in_text(self):
@@ -551,11 +660,12 @@ class ImageCropperApp(tk.Tk):
     def _enter_open_if_empty(self, event=None):
         if not self.images:
             self.choose_files()
-            return "break"
+            return "break"  # prevent stray newline in any focused Text widget
 
     def load_current(self):
         if not self.images or self.idx < 0 or self.idx >= len(self.images):
-            self.viewport.set_image(Image.new("RGBA", (self.get_frame_size(), self.get_frame_size()), (20, 20, 20, 255)))
+            # show empty canvas state
+            self.viewport.clear()
             self.file_label.config(text="No files loaded")
             return
         path = self.images[self.idx]
@@ -696,26 +806,38 @@ class ImageCropperApp(tk.Tk):
             self.load_current()
             self.update_status()
         else:
-            # Clear image & status when no more images
+            # End-of-queue: reset UI to clean state
             self.images = []
             self.idx = -1
-            self.viewport.set_image(
-                Image.new("RGBA", (self.get_frame_size(), self.get_frame_size()), (20, 20, 20, 255))
-            )
+            self.viewport.clear()
             self.file_label.config(text="No files loaded")
             self.progress_label.config(text="—")
             self.clear_notes()
             messagebox.showinfo("Done", "No more images.")
 
     def skip(self, move_current=True):
+        # Count current notes before clearing (does NOT include global words)
         txt = self.note_text.get("1.0", "end-1c")
         if txt.strip():
             self._process_text_for_counts(txt)
         if move_current and self.images and 0 <= self.idx < len(self.images):
             self._move_current_to_processed()
+        # Persist globals on skips too
         self._save_global_words()
         self.clear_notes()
-        self.next_image()
+
+        # Move to next or clear if done (same behavior as next_image end-case)
+        if self.idx < len(self.images) - 1:
+            self.idx += 1
+            self.load_current()
+            self.update_status()
+        else:
+            self.images = []
+            self.idx = -1
+            self.viewport.clear()
+            self.file_label.config(text="No files loaded")
+            self.progress_label.config(text="—")
+            messagebox.showinfo("Done", "No more images.")
 
     # ---- Save ----
     def save_and_next(self):
@@ -760,7 +882,7 @@ class ImageCropperApp(tk.Tk):
             # Move original to 'processed'
             self._move_current_to_processed()
 
-            # Persist current global words on each save
+            # Persist current global words
             self._save_global_words()
         except Exception as e:
             messagebox.showerror("Save error", f"Failed to save or move file.\n\n{e}")
@@ -787,9 +909,12 @@ class ImageCropperApp(tk.Tk):
     def clear_notes(self):
         if hasattr(self, "note_text"):
             self.note_text.delete("1.0", "end")
+        # Important: DO NOT clear global_text
 
     def on_close(self):
+        # Save globals + config on exit and close the app
         self._save_global_words()
+        self._save_config()
         self.destroy()
 
     @staticmethod
