@@ -191,5 +191,7 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# program files
 global_words.txt
 suggest_history.txt
+config.json
