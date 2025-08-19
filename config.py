@@ -13,6 +13,7 @@ DEFAULTS = {
     "frame_size": 768,
     "output_dir": "output",        # relative to image folder
     "processed_dir": "processed",  # relative to image folder
+    "last_open_dir": None,
 }
 
 class AppConfig:
@@ -32,20 +33,8 @@ class AppConfig:
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
-            for k in DEFAULTS.keys():
-                # Only override if present; allow empty string to mean "use default"
-                if k in loaded:
-                    val = loaded[k]
-                    if k in ("output_dir", "processed_dir"):
-                        # Accept any string (keep relative if given relative)
-                        if isinstance(val, str) and val.strip() != "":
-                            self.data[k] = val
-                        else:
-                            self.data[k] = DEFAULTS[k]
-                    else:
-                        self.data[k] = loaded.get(k, self.data[k])
+            self.data.update(loaded)  # <-- merge all keys, not just those in DEFAULTS
         except Exception:
-            # keep defaults
             pass
 
     def save(self):

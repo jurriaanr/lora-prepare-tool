@@ -8,6 +8,7 @@ from PIL import Image
 from viewport import ImageViewport
 from config import AppConfig, HISTORY_FILE, GLOBAL_WORDS_FILE
 from suggestions import SuggestionStore, parts_from_text, SUGGEST_THRESHOLD
+from pathlib import Path
 
 SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
 
@@ -21,6 +22,9 @@ class LoraPrepareApp(tk.Tk):
         self.config = AppConfig(self.app_dir)
         self.history_path = os.path.join(self.app_dir, HISTORY_FILE)
         self.global_words_path = os.path.join(self.app_dir, GLOBAL_WORDS_FILE)
+        self.last_open_dir = self.config.get("last_open_dir", os.path.expanduser("~"))
+
+        
 
         # Geometry from config if available
         geom = self.config.get("geometry")
@@ -202,15 +206,29 @@ class LoraPrepareApp(tk.Tk):
 
     # ---- File handling ----
     def choose_files(self):
+        init_dir = self.last_open_dir
+        if not os.path.isdir(init_dir):
+            init_dir = os.path.expanduser("~")
+
+        # Use tuple-of-patterns so Linux Tk shows images correctly
         paths = filedialog.askopenfilenames(
-            filetypes=[("Image files", "*.jpg;*.jpeg;*.png;*.bmp;*.tif;*.tiff;*.webp"),
-                       ("All files", "*.*")]
+            title="Select Images",
+            initialdir=os.path.abspath(init_dir),
+            filetypes=[
+                ("Image files", ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tif", "*.tiff", "*.webp")),
+                ("All files", "*.*"),
+            ]
         )
         if not paths:
             return
         files = [os.path.abspath(p) for p in paths if os.path.splitext(p)[1].lower() in SUPPORTED_EXTS]
         if not files:
             return
+
+        self.last_open_dir = os.path.dirname(files[0])
+        self.config.set("last_open_dir", self.last_open_dir)
+        self._save_config()
+
         self.images = files
         self.idx = 0
         self.clear_notes()
@@ -352,9 +370,12 @@ class LoraPrepareApp(tk.Tk):
             messagebox.showinfo("Done", "No more images.")
 
     def skip(self, move_current=True):
+        # Update suggestions (live) with notes text
         txt = self.note_text.get("1.0", "end-1c")
         if txt.strip():
             self.suggest.process_text_for_counts(txt)
+            self._refresh_suggestions()  # <-- live refresh
+
         if move_current and self.images and 0 <= self.idx < len(self.images):
             self._move_current_to_processed()
         self._save_global_words()
@@ -399,9 +420,10 @@ class LoraPrepareApp(tk.Tk):
             with open(txt_out_path, "w", encoding="utf-8") as f:
                 f.write(combined_txt)
 
-            # Update suggestions with only per-image notes
+            # Update suggestions with only per-image notes (and refresh live)
             if notes_parts:
                 self.suggest.process_text_for_counts(", ".join(notes_parts))
+                self._refresh_suggestions()  # <-- live refresh
 
             # Move original to 'processed'
             self._move_current_to_processed(proc_dir)
@@ -435,6 +457,19 @@ class LoraPrepareApp(tk.Tk):
     def clear_notes(self):
         if hasattr(self, "note_text"):
             self.note_text.delete("1.0", "end")
+
+    def _apply_app_icon(self) -> None:
+        app_dir = Path(self.app_dir)
+        try:
+            if sys.platform.startswith("win"):
+                self.iconbitmap(default=str(app_dir / "icon.ico"))
+            else:
+                img = tk.PhotoImage(file=str(app_dir / "icon.png"))
+                self._icon_image_ref = img  # prevent GC
+                self.wm_iconphoto(True, img)
+        except Exception as e:
+            # Keep the try/except as requested; crash-free but visible in stderr
+            print(f"[icon] failed to apply app icon: {e}", file=sys.stderr)
 
     def _load_global_words(self):
         try:
